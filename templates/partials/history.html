@@ -1,0 +1,28 @@
+{% for session in history %}
+<div class="history-item"
+     hx-get="/api/history/{{ loop.index0 }}"
+     hx-target="#results-area"
+     hx-swap="innerHTML">
+    <div class="history-query">
+        <strong>{{ session.query.table_name }}.{{ session.query.column_name }}</strong>
+        <span class="history-type">{{ session.query.expected_data_type }}</span>
+    </div>
+    <div class="history-meta">
+        <span class="history-cluster">{{ session.query.cluster }}</span>
+        <span class="history-time">{{ session.query.started_at.strftime("%H:%M") }}</span>
+    </div>
+    <div class="history-counts">
+        {% if session.match_count > 0 %}
+        <span class="pill pill-match">{{ session.match_count }}</span>
+        {% endif %}
+        {% if session.mismatch_count > 0 %}
+        <span class="pill pill-mismatch">{{ session.mismatch_count }}</span>
+        {% endif %}
+        {% if session.not_found_count > 0 %}
+        <span class="pill pill-not-found">{{ session.not_found_count }}</span>
+        {% endif %}
+    </div>
+</div>
+{% else %}
+<div class="history-empty">No inspections yet</div>
+{% endfor %}

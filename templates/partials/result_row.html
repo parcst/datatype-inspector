@@ -1,0 +1,21 @@
+<tr class="result-row {{ result.status.value }}-row">
+    <td>
+        <span class="badge badge-{{ result.status.value }}">{{ result.status.value | upper }}</span>
+    </td>
+    <td class="connection-name">{{ result.connection_name }}</td>
+    <td>{{ result.uri }}</td>
+    <td>{{ result.account_id }}</td>
+    <td>{{ result.region }}</td>
+    <td class="data-type">
+        {% if result.status.value == "match" %}
+            {{ result.actual_data_type }}
+        {% elif result.status.value == "mismatch" %}
+            <span class="type-mismatch">{{ result.actual_data_type }}</span>
+            <span class="type-expected">(expected: {{ expected }})</span>
+        {% elif result.status.value == "error" %}
+            <span class="type-error" title="{{ result.error_message }}">Error</span>
+        {% else %}
+            <span class="type-not-found">N/A</span>
+        {% endif %}
+    </td>
+</tr>

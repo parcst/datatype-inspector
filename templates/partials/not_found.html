@@ -1,0 +1,50 @@
+{% if not_found %}
+<div class="not-found-section">
+    <h3>Not Found ({{ not_found | length }})</h3>
+    <p class="not-found-desc">Column was not found in these connections.</p>
+    <table class="results-table not-found-table">
+        <thead>
+            <tr>
+                <th>Connection</th>
+                <th>URI</th>
+                <th>Account</th>
+                <th>Region</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in not_found %}
+            <tr class="not-found-row">
+                <td>{{ r.connection_name }}</td>
+                <td>{{ r.uri }}</td>
+                <td>{{ r.account_id }}</td>
+                <td>{{ r.region }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{% if errors %}
+<div class="error-section">
+    <h3>Errors ({{ errors | length }})</h3>
+    <table class="results-table error-table">
+        <thead>
+            <tr>
+                <th>Connection</th>
+                <th>URI</th>
+                <th>Error</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in errors %}
+            <tr class="error-row">
+                <td>{{ r.connection_name }}</td>
+                <td>{{ r.uri }}</td>
+                <td class="error-msg">{{ r.error_message }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}

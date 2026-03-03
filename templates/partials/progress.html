@@ -1,0 +1,24 @@
+<div class="progress-wrapper">
+    <div class="progress-bar-track">
+        <div class="progress-bar-fill {% if done %}done{% endif %}"
+             style="width: {{ (current / total * 100) if total > 0 else 0 }}%">
+        </div>
+    </div>
+    <div class="progress-stats">
+        <span class="progress-count">
+            {% if done %}
+                Complete
+            {% else %}
+                {{ current }} / {{ total }}
+            {% endif %}
+        </span>
+        <span class="stat stat-match">{{ session.match_count }} matched</span>
+        <span class="stat stat-mismatch">{{ session.mismatch_count }} mismatched</span>
+        {% if session.not_found_count > 0 %}
+        <span class="stat stat-not-found">{{ session.not_found_count }} not found</span>
+        {% endif %}
+        {% if session.error_count > 0 %}
+        <span class="stat stat-error">{{ session.error_count }} errors</span>
+        {% endif %}
+    </div>
+</div>

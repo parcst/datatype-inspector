@@ -1,0 +1,67 @@
+<div class="results-header">
+    <h2>Past Inspection</h2>
+    <p>
+        <strong>{{ session.query.cluster }}</strong> &mdash;
+        {{ session.query.database_name }}.{{ session.query.table_name }}.{{ session.query.column_name }}
+        (expected: <code>{{ session.query.expected_data_type }}</code>)
+    </p>
+    <div class="progress-wrapper">
+        <div class="progress-stats">
+            <span class="progress-count">Complete</span>
+            <span class="stat stat-match">{{ session.match_count }} matched</span>
+            <span class="stat stat-mismatch">{{ session.mismatch_count }} mismatched</span>
+            {% if session.not_found_count > 0 %}
+            <span class="stat stat-not-found">{{ session.not_found_count }} not found</span>
+            {% endif %}
+            {% if session.error_count > 0 %}
+            <span class="stat stat-error">{{ session.error_count }} errors</span>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+{% set has_found = session.match_count > 0 or session.mismatch_count > 0 %}
+{% set not_found = [] %}
+{% set errors = [] %}
+{% for r in session.results %}
+    {% if r.status.value == "not_found" %}{% if not_found.append(r) %}{% endif %}{% endif %}
+    {% if r.status.value == "error" %}{% if errors.append(r) %}{% endif %}{% endif %}
+{% endfor %}
+
+{% if has_found %}
+<table class="results-table">
+    <thead>
+        <tr>
+            <th>Status</th>
+            <th>Connection</th>
+            <th>URI</th>
+            <th>Account</th>
+            <th>Region</th>
+            <th>Data Type</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for r in session.results if r.status.value in ["mismatch", "match"] %}
+        <tr class="result-row {{ r.status.value }}-row">
+            <td><span class="badge badge-{{ r.status.value }}">{{ r.status.value | upper }}</span></td>
+            <td class="connection-name">{{ r.connection_name }}</td>
+            <td>{{ r.uri }}</td>
+            <td>{{ r.account_id }}</td>
+            <td>{{ r.region }}</td>
+            <td class="data-type">
+                {% if r.status.value == "match" %}
+                    {{ r.actual_data_type }}
+                {% else %}
+                    <span class="type-mismatch">{{ r.actual_data_type }}</span>
+                    <span class="type-expected">(expected: {{ session.query.expected_data_type }})</span>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+
+{% if not_found or errors %}
+{% include "partials/not_found.html" %}
+{% endif %}

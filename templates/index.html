@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+
+{% block sidebar %}
+{% include "partials/history.html" %}
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Data Type Inspector</h1>
+    <p>Check a column's data type across every MySQL instance in a Teleport cluster.</p>
+</div>
+
+<div class="card form-card">
+    <form id="inspect-form" onsubmit="startInspection(event)">
+        <div class="form-grid">
+            <div class="form-group">
+                <label for="cluster">Cluster</label>
+                <div class="cluster-row">
+                    <select name="cluster" id="cluster" required>
+                        <option value="">Select cluster...</option>
+                        {% for c in clusters %}
+                        <option value="{{ c }}">{{ c }}</option>
+                        {% endfor %}
+                    </select>
+                    <button type="button" id="login-btn"
+                            hx-post="/api/login"
+                            hx-include="#cluster"
+                            hx-target="#login-status"
+                            hx-swap="innerHTML"
+                            class="btn btn-secondary">
+                        Login
+                    </button>
+                </div>
+                <div id="login-status">
+                    {% if username %}
+                    <div class="login-status login-success">
+                        Logged in as <strong>{{ username }}</strong>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="database_name">Database Name</label>
+                <input type="text" name="database_name" id="database_name" required
+                       placeholder="e.g. my_database">
+            </div>
+
+            <div class="form-group">
+                <label for="table_name">Table Name</label>
+                <input type="text" name="table_name" id="table_name" required
+                       placeholder="e.g. users">
+            </div>
+
+            <div class="form-group">
+                <label for="column_name">Column Name</label>
+                <input type="text" name="column_name" id="column_name" required
+                       placeholder="e.g. id">
+            </div>
+
+            <div class="form-group">
+                <label for="expected_data_type">Expected Data Type</label>
+                <select name="expected_data_type" id="expected_data_type" required>
+                    <option value="">Select type...</option>
+                    {% for category, types in mysql_data_types.items() %}
+                    <optgroup label="{{ category }}">
+                        {% for t in types %}
+                        <option value="{{ t }}">{{ t }}</option>
+                        {% endfor %}
+                    </optgroup>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary" id="submit-btn">
+                Inspect All Databases
+            </button>
+            <button type="button" class="btn btn-secondary" id="cancel-btn"
+                    onclick="cancelInspection()" style="display:none">
+                Cancel
+            </button>
+        </div>
+    </form>
+</div>
+
+<div id="results-area">
+    <!-- Results injected here by SSE -->
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let eventSource = null;
+
+function startInspection(e) {
+    e.preventDefault();
+    const form = document.getElementById('inspect-form');
+    const formData = new FormData(form);
+    const params = new URLSearchParams(formData).toString();
+
+    // Reset results area
+    document.getElementById('results-area').innerHTML = `
+        <div id="progress-area"></div>
+        <table class="results-table" id="results-table">
+            <thead>
+                <tr>
+                    <th>Status</th>
+                    <th>Connection</th>
+                    <th>URI</th>
+                    <th>Account</th>
+                    <th>Region</th>
+                    <th>Data Type</th>
+                </tr>
+            </thead>
+            <tbody id="results-body"></tbody>
+        </table>
+        <div id="not-found-area"></div>
+    `;
+
+    // Toggle buttons
+    document.getElementById('submit-btn').disabled = true;
+    document.getElementById('cancel-btn').style.display = '';
+
+    // Connect SSE
+    eventSource = new EventSource('/api/inspect?' + params);
+
+    eventSource.addEventListener('result', function(e) {
+        const data = JSON.parse(e.data);
+
+        // Update progress
+        document.getElementById('progress-area').innerHTML = data.progress_html;
+
+        // Insert row: mismatches at top, matches at bottom
+        const tbody = document.getElementById('results-body');
+        if (data.status === 'mismatch' || data.status === 'error') {
+            // Insert before the first match row
+            const firstMatch = tbody.querySelector('.match-row');
+            if (firstMatch) {
+                firstMatch.insertAdjacentHTML('beforebegin', data.row_html);
+            } else {
+                tbody.insertAdjacentHTML('beforeend', data.row_html);
+            }
+        } else if (data.status === 'match') {
+            tbody.insertAdjacentHTML('beforeend', data.row_html);
+        }
+        // not_found and error rows are not shown in main table
+    });
+
+    eventSource.addEventListener('done', function(e) {
+        const data = JSON.parse(e.data);
+
+        // Update progress
+        document.getElementById('progress-area').innerHTML = data.progress_html;
+
+        // Show not-found section
+        if (data.not_found_html) {
+            document.getElementById('not-found-area').innerHTML = data.not_found_html;
+        }
+
+        // Update history sidebar
+        document.getElementById('history-list').innerHTML = data.history_html;
+        htmx.process(document.getElementById('history-list'));
+
+        // Hide empty results table if no match/mismatch rows
+        const tbody = document.getElementById('results-body');
+        if (tbody && tbody.children.length === 0) {
+            document.getElementById('results-table').style.display = 'none';
+        }
+
+        cleanup();
+    });
+
+    eventSource.addEventListener('error', function(e) {
+        if (eventSource.readyState === EventSource.CLOSED) return;
+
+        const errorArea = document.getElementById('not-found-area');
+        if (e.data) {
+            errorArea.innerHTML = '<div class="error-banner">Error: ' + e.data + '</div>';
+        }
+        cleanup();
+    });
+
+    eventSource.onerror = function() {
+        // SSE connection error (not our custom error event)
+        cleanup();
+    };
+}
+
+function cancelInspection() {
+    if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+    }
+    cleanup();
+}
+
+function cleanup() {
+    if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+    }
+    document.getElementById('submit-btn').disabled = false;
+    document.getElementById('cancel-btn').style.display = 'none';
+}
+</script>
+{% endblock %}
