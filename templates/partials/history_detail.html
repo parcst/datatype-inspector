@@ -20,20 +20,26 @@
     </div>
 </div>
 
-{% set has_found = session.match_count > 0 or session.mismatch_count > 0 %}
+{% set mismatches = [] %}
+{% set error_results = [] %}
+{% set matches = [] %}
 {% set not_found = [] %}
-{% set errors = [] %}
 {% for r in session.results %}
+    {% if r.status.value == "mismatch" %}{% if mismatches.append(r) %}{% endif %}{% endif %}
+    {% if r.status.value == "error" %}{% if error_results.append(r) %}{% endif %}{% endif %}
+    {% if r.status.value == "match" %}{% if matches.append(r) %}{% endif %}{% endif %}
     {% if r.status.value == "not_found" %}{% if not_found.append(r) %}{% endif %}{% endif %}
-    {% if r.status.value == "error" %}{% if errors.append(r) %}{% endif %}{% endif %}
 {% endfor %}
+{% set errors = error_results %}
+{% set table_rows = mismatches + error_results + matches %}
 
-{% if has_found %}
+{% if table_rows %}
 <table class="results-table">
     <thead>
         <tr>
             <th>Status</th>
             <th>Connection</th>
+            <th>Database</th>
             <th>URI</th>
             <th>Account</th>
             <th>Region</th>
@@ -41,19 +47,22 @@
         </tr>
     </thead>
     <tbody>
-        {% for r in session.results if r.status.value in ["mismatch", "match"] %}
+        {% for r in table_rows %}
         <tr class="result-row {{ r.status.value }}-row">
             <td><span class="badge badge-{{ r.status.value }}">{{ r.status.value | upper }}</span></td>
             <td class="connection-name">{{ r.connection_name }}</td>
+            <td>{{ r.database_name }}</td>
             <td>{{ r.uri }}</td>
             <td>{{ r.account_id }}</td>
             <td>{{ r.region }}</td>
             <td class="data-type">
                 {% if r.status.value == "match" %}
                     {{ r.actual_data_type }}
-                {% else %}
+                {% elif r.status.value == "mismatch" %}
                     <span class="type-mismatch">{{ r.actual_data_type }}</span>
                     <span class="type-expected">(expected: {{ session.query.expected_data_type }})</span>
+                {% elif r.status.value == "error" %}
+                    <span class="type-error" title="{{ r.error_message }}">Error</span>
                 {% endif %}
             </td>
         </tr>

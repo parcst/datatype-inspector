@@ -14,6 +14,11 @@ from .teleport import find_tsh, list_mysql_databases, start_tunnel, stop_tunnel
 logger = logging.getLogger(__name__)
 
 
+def _parse_database_names(raw: str) -> list[str]:
+    """Split comma-separated database names, strip whitespace, drop empties."""
+    return [name.strip() for name in raw.split(",") if name.strip()]
+
+
 async def inspect_databases(
     query: InspectionQuery,
 ) -> AsyncGenerator[tuple[InspectionResult, int, int], None]:
@@ -35,23 +40,27 @@ async def inspect_databases(
         for d in raw_dbs
     ]
 
+    db_names = _parse_database_names(query.database_name)
     total = len(entries)
     if total == 0:
         return
 
     for idx, entry in enumerate(entries):
-        result = await asyncio.to_thread(
-            _inspect_single_database, tsh, entry, query
+        results = await asyncio.to_thread(
+            _inspect_single_database, tsh, entry, query, db_names
         )
-        yield result, idx + 1, total
+        for result in results:
+            yield result, idx + 1, total
 
 
 def _inspect_single_database(
     tsh: str,
     db_entry: DatabaseEntry,
     query: InspectionQuery,
-) -> InspectionResult:
-    """Connect to a single database via tunnel and check the column data type."""
+    db_names: list[str],
+) -> list[InspectionResult]:
+    """Connect to a single RDS instance via tunnel and check the column data type
+    across one or more database schemas."""
     tunnel = None
     try:
         tunnel = start_tunnel(
@@ -71,51 +80,69 @@ def _inspect_single_database(
         )
         try:
             with conn.cursor() as cursor:
+                placeholders = ", ".join(["%s"] * len(db_names))
                 cursor.execute(
-                    "SELECT DATA_TYPE FROM information_schema.COLUMNS "
-                    "WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND COLUMN_NAME = %s",
-                    (query.database_name, query.table_name, query.column_name),
+                    f"SELECT TABLE_SCHEMA, DATA_TYPE FROM information_schema.COLUMNS "
+                    f"WHERE TABLE_SCHEMA IN ({placeholders}) "
+                    f"AND TABLE_NAME = %s AND COLUMN_NAME = %s",
+                    (*db_names, query.table_name, query.column_name),
                 )
-                row = cursor.fetchone()
+                rows = cursor.fetchall()
         finally:
             conn.close()
 
-        if row is None:
-            return InspectionResult(
+        # Build a map of schema -> data_type from results
+        found: dict[str, str] = {}
+        for schema, data_type in rows:
+            found[schema] = data_type.lower()
+
+        results: list[InspectionResult] = []
+        expected = query.expected_data_type.lower()
+
+        for db_name in db_names:
+            if db_name in found:
+                actual = found[db_name]
+                status = (
+                    InspectionStatus.MATCH if actual == expected else InspectionStatus.MISMATCH
+                )
+                results.append(InspectionResult(
+                    connection_name=db_entry.name,
+                    uri=db_entry.uri,
+                    account_id=db_entry.account_id,
+                    region=db_entry.region,
+                    actual_data_type=actual,
+                    status=status,
+                    database_name=db_name,
+                ))
+            else:
+                results.append(InspectionResult(
+                    connection_name=db_entry.name,
+                    uri=db_entry.uri,
+                    account_id=db_entry.account_id,
+                    region=db_entry.region,
+                    actual_data_type="",
+                    status=InspectionStatus.NOT_FOUND,
+                    database_name=db_name,
+                ))
+
+        return results
+
+    except Exception as e:
+        logger.exception("Error inspecting %s", db_entry.name)
+        # Return one error result per database name
+        return [
+            InspectionResult(
                 connection_name=db_entry.name,
                 uri=db_entry.uri,
                 account_id=db_entry.account_id,
                 region=db_entry.region,
                 actual_data_type="",
-                status=InspectionStatus.NOT_FOUND,
+                status=InspectionStatus.ERROR,
+                database_name=db_name,
+                error_message=str(e),
             )
-
-        actual_type = row[0].lower()
-        expected = query.expected_data_type.lower()
-        status = (
-            InspectionStatus.MATCH if actual_type == expected else InspectionStatus.MISMATCH
-        )
-
-        return InspectionResult(
-            connection_name=db_entry.name,
-            uri=db_entry.uri,
-            account_id=db_entry.account_id,
-            region=db_entry.region,
-            actual_data_type=actual_type,
-            status=status,
-        )
-
-    except Exception as e:
-        logger.exception("Error inspecting %s", db_entry.name)
-        return InspectionResult(
-            connection_name=db_entry.name,
-            uri=db_entry.uri,
-            account_id=db_entry.account_id,
-            region=db_entry.region,
-            actual_data_type="",
-            status=InspectionStatus.ERROR,
-            error_message=str(e),
-        )
+            for db_name in db_names
+        ]
 
     finally:
         if tunnel is not None:

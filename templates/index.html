@@ -5,11 +5,6 @@
 {% endblock %}
 
 {% block content %}
-<div class="page-header">
-    <h1>Data Type Inspector</h1>
-    <p>Check a column's data type across every MySQL instance in a Teleport cluster.</p>
-</div>
-
 <div class="card form-card">
     <form id="inspect-form" onsubmit="startInspection(event)">
         <div class="form-grid">
@@ -43,7 +38,7 @@
             <div class="form-group">
                 <label for="database_name">Database Name</label>
                 <input type="text" name="database_name" id="database_name" required
-                       placeholder="e.g. my_database">
+                       placeholder="e.g. my_database, other_db">
             </div>
 
             <div class="form-group">
@@ -108,6 +103,7 @@ function startInspection(e) {
                 <tr>
                     <th>Status</th>
                     <th>Connection</th>
+                    <th>Database</th>
                     <th>URI</th>
                     <th>Account</th>
                     <th>Region</th>
@@ -132,10 +128,18 @@ function startInspection(e) {
         // Update progress
         document.getElementById('progress-area').innerHTML = data.progress_html;
 
-        // Insert row: mismatches at top, matches at bottom
+        // Insert row sorted: mismatches first, then errors, then matches
         const tbody = document.getElementById('results-body');
-        if (data.status === 'mismatch' || data.status === 'error') {
-            // Insert before the first match row
+        if (data.status === 'mismatch') {
+            // Insert before the first error or match row
+            const firstNonMismatch = tbody.querySelector('.error-row, .match-row');
+            if (firstNonMismatch) {
+                firstNonMismatch.insertAdjacentHTML('beforebegin', data.row_html);
+            } else {
+                tbody.insertAdjacentHTML('beforeend', data.row_html);
+            }
+        } else if (data.status === 'error') {
+            // Insert before the first match row (after mismatches)
             const firstMatch = tbody.querySelector('.match-row');
             if (firstMatch) {
                 firstMatch.insertAdjacentHTML('beforebegin', data.row_html);
@@ -145,7 +149,7 @@ function startInspection(e) {
         } else if (data.status === 'match') {
             tbody.insertAdjacentHTML('beforeend', data.row_html);
         }
-        // not_found and error rows are not shown in main table
+        // not_found rows are shown in the separate not-found section
     });
 
     eventSource.addEventListener('done', function(e) {

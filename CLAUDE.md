@@ -40,18 +40,18 @@ Web tool that connects to every MySQL database in a Teleport cluster and reports
 
 - `app.py` — FastAPI app, routes, SSE event stream, in-memory session history
 - `inspector.py` — Async generator: tunnels to each DB sequentially, queries `information_schema.COLUMNS` for `DATA_TYPE`. Uses `asyncio.to_thread()` to avoid blocking the event loop.
-- `teleport.py` — `tsh` CLI integration: find binary, list clusters/databases, start/stop tunnels, SSO login. Uses `--proxy=` instead of `--cluster=` for `tsh db ls` and `tsh db login`/`tsh proxy db` (required when the target cluster isn't the active profile). **Note**: `tsh status` returns exit code 1 even when logged in — never use `check=True` with it.
+- `teleport.py` — `tsh` CLI integration: find binary, list clusters/databases, start/stop tunnels, SSO login. Uses `--proxy=` instead of `--cluster=` for `tsh db ls` and `tsh db login`/`tsh proxy db` (required when the target cluster isn't the active profile). Cluster-aware login status (`get_login_status`) checks both `active` and `profiles` arrays. Thread-safe tunnel registry (`register_tunnel`/`unregister_tunnel`/`cleanup_all`) tracks all active tunnels for cleanup on shutdown. Timeouts on all subprocess calls (10s status, 30s db login/ls). **Note**: `tsh status` returns exit code 1 even when logged in — never use `check=True` with it.
 - `models.py` — Dataclasses (`InspectionResult`, `InspectionSession`, `InspectionQuery`, `DatabaseEntry`), `InspectionStatus` enum, `MYSQL_DATA_TYPES` category dict
 - `templates/index.html` — Main page with form + vanilla JS `EventSource` handler that sorts mismatches to top
 - `templates/partials/` — HTMX fragments: `result_row.html`, `progress.html`, `not_found.html`, `login_status.html`, `history.html`, `history_detail.html`
 
 ### Data Flow
 
-1. User fills form (cluster, database name, table, column, expected type). DB user is resolved automatically from `tsh status --format=json` — login validation is **cluster-aware** (checks both `active` and `profiles` arrays to find the matching cluster, not just that *some* session exists).
+1. User fills form (cluster, database name(s), table, column, expected type). Database name field accepts comma-separated list (whitespace trimmed). DB user is resolved automatically from `tsh status --format=json` — login validation is **cluster-aware** (checks both `active` and `profiles` arrays to find the matching cluster, not just that *some* session exists).
 2. Frontend opens `EventSource` to `/api/inspect?params`
 3. Backend lists all MySQL DBs on the cluster via `tsh db ls --format=json`
-4. For each DB sequentially (one tunnel at a time to avoid port conflicts): open tunnel → PyMySQL connect → query `information_schema.COLUMNS` → close tunnel → yield SSE `result` event
-5. Frontend JS inserts rows: mismatches/errors before first `.match-row`, matches appended at bottom
+4. For each DB sequentially (one tunnel at a time to avoid port conflicts): open tunnel → PyMySQL connect → query `information_schema.COLUMNS` with `TABLE_SCHEMA IN (...)` for all requested databases → close tunnel → yield one SSE `result` event per database name
+5. Frontend JS inserts rows: mismatches/errors before first `.match-row`, matches appended at bottom. Results include Database column to distinguish multi-database queries.
 6. On completion: SSE `done` event with not-found section, final stats, updated history sidebar HTML
 
 ### SSE Event Types

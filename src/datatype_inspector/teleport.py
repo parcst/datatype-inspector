@@ -7,6 +7,7 @@ import logging
 import re
 import shutil
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +30,66 @@ class TeleportTunnel:
     port: int
     db_name: str
     db_user: str
+
+
+# ---------------------------------------------------------------------------
+# Tunnel registry (thread-safe)
+# ---------------------------------------------------------------------------
+
+_active_tunnels: dict[str, TeleportTunnel] = {}
+_tunnel_lock = threading.Lock()
+
+
+def register_tunnel(tunnel: TeleportTunnel) -> None:
+    """Register a tunnel in the global registry."""
+    with _tunnel_lock:
+        _active_tunnels[tunnel.db_name] = tunnel
+
+
+def unregister_tunnel(db_name: str) -> None:
+    """Remove a tunnel from the global registry."""
+    with _tunnel_lock:
+        _active_tunnels.pop(db_name, None)
+
+
+def get_active_tunnel(db_name: str) -> TeleportTunnel | None:
+    """Return an active tunnel for *db_name*, or None."""
+    with _tunnel_lock:
+        return _active_tunnels.get(db_name)
+
+
+def cleanup_all() -> None:
+    """Kill all registered tunnels and log out. Safe to call multiple times."""
+    with _tunnel_lock:
+        tunnels = list(_active_tunnels.values())
+        _active_tunnels.clear()
+
+    if not tunnels:
+        return
+
+    tsh: str | None = None
+    try:
+        tsh = find_tsh()
+    except FileNotFoundError:
+        pass  # still kill processes even without tsh
+
+    for tunnel in tunnels:
+        try:
+            tunnel.process.terminate()
+        except Exception:
+            pass
+
+        if tsh:
+            try:
+                subprocess.run(
+                    [tsh, "db", "logout", tunnel.db_name],
+                    capture_output=True,
+                    timeout=5,
+                )
+            except Exception:
+                pass
+
+    logger.info("Cleaned up %d tunnel(s)", len(tunnels))
 
 
 # ---------------------------------------------------------------------------
@@ -63,30 +124,64 @@ def find_tsh(override: str = "") -> str:
 
 def get_clusters() -> list[str]:
     """Return cluster names from ``~/.tsh/*.yaml`` profile files."""
-    profiles = sorted(_TSH_DIR.glob("*.yaml"))
-    clusters = [p.stem for p in profiles]
-    return clusters
+    try:
+        profiles = sorted(_TSH_DIR.glob("*.yaml"))
+        return [p.stem for p in profiles]
+    except Exception:
+        return []
 
 
-def get_logged_in_user(tsh: str) -> str:
-    """Return the username from ``tsh status --format=json``."""
-    result = subprocess.run(
-        [tsh, "status", "--format=json"],
-        capture_output=True,
-        text=True,
-    )
-    if not result.stdout.strip():
-        raise RuntimeError("tsh status returned no output. Are you logged in?")
-    status = json.loads(result.stdout)
+def get_login_status(
+    tsh: str, cluster: str | None = None
+) -> tuple[bool, str]:
+    """Cluster-aware login check. Returns (is_logged_in, username).
 
-    username: str = ""
-    if isinstance(status, dict):
-        username = (
-            status.get("active", {}).get("username", "")
-            or status.get("username", "")
+    Checks both active profile and inactive profiles for the target cluster.
+    Never raises — returns (False, "") on any failure.
+    """
+    try:
+        result = subprocess.run(
+            [tsh, "status", "--format=json"],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
+        # tsh status returns exit code 1 even when logged in — use stdout anyway
+        if not result.stdout.strip():
+            return False, ""
 
-    if not username:
+        status = json.loads(result.stdout)
+        if not isinstance(status, dict):
+            return False, ""
+
+        # Check active profile first
+        active = status.get("active", {})
+        if not cluster or active.get("cluster") == cluster:
+            username = active.get("username", "")
+            if username:
+                return True, username
+
+        # Check inactive profiles for specific cluster
+        profiles: list[dict] = status.get("profiles", [])
+        for profile in profiles:
+            if profile.get("cluster") == cluster and profile.get("username"):
+                return True, profile["username"]
+
+        # If no cluster specified, return whatever active gives us
+        if not cluster:
+            username = active.get("username", "")
+            if username:
+                return True, username
+
+        return False, ""
+    except Exception:
+        return False, ""
+
+
+def get_logged_in_user(tsh: str, cluster: str | None = None) -> str:
+    """Return the username for *cluster*. Raises on failure."""
+    logged_in, username = get_login_status(tsh, cluster)
+    if not logged_in or not username:
         raise RuntimeError(
             "Could not determine Teleport username from 'tsh status'. "
             "Are you logged in?"
@@ -94,13 +189,12 @@ def get_logged_in_user(tsh: str) -> str:
     return username
 
 
-def check_login_status(tsh: str) -> tuple[bool, str]:
+def check_login_status(tsh: str, cluster: str | None = None) -> tuple[bool, str]:
     """Check if the user is logged in. Returns (is_logged_in, username_or_error)."""
-    try:
-        username = get_logged_in_user(tsh)
+    logged_in, username = get_login_status(tsh, cluster)
+    if logged_in:
         return True, username
-    except Exception as e:
-        return False, str(e)
+    return False, "Not logged in"
 
 
 def login_to_cluster(tsh: str, cluster: str) -> subprocess.Popen:  # type: ignore[type-arg]
@@ -130,6 +224,7 @@ def list_mysql_databases(tsh: str, cluster: str) -> list[dict[str, str]]:
         capture_output=True,
         text=True,
         check=True,
+        timeout=30,
     )
     raw = json.loads(result.stdout)
     if not isinstance(raw, list):
@@ -169,6 +264,8 @@ def start_tunnel(
     1. ``tsh db login <db_name> --db-user=<db_user>``
     2. ``tsh proxy db --tunnel --port 0 <db_name>`` (background)
     3. Parse stdout for the listening port.
+
+    The tunnel is automatically registered in the global registry.
     """
     cluster_args = [f"--proxy={cluster}"] if cluster else []
 
@@ -178,6 +275,7 @@ def start_tunnel(
         [tsh, "db", "login", db_name, f"--db-user={db_user}"] + cluster_args,
         check=True,
         capture_output=True,
+        timeout=30,
     )
 
     # Step 2: start tunnel
@@ -193,13 +291,15 @@ def start_tunnel(
     port = _wait_for_tunnel_port(proc)
     logger.info("Tunnel ready on 127.0.0.1:%d", port)
 
-    return TeleportTunnel(
+    tunnel = TeleportTunnel(
         process=proc,
         host="127.0.0.1",
         port=port,
         db_name=db_name,
         db_user=db_user,
     )
+    register_tunnel(tunnel)
+    return tunnel
 
 
 def _wait_for_tunnel_port(proc: subprocess.Popen) -> int:  # type: ignore[type-arg]
@@ -231,6 +331,7 @@ def _wait_for_tunnel_port(proc: subprocess.Popen) -> int:  # type: ignore[type-a
 def stop_tunnel(tsh: str, tunnel: TeleportTunnel) -> None:
     """Terminate the tunnel process and log out of the database."""
     logger.info("Stopping tunnel for %s ...", tunnel.db_name)
+    unregister_tunnel(tunnel.db_name)
     try:
         tunnel.process.terminate()
         tunnel.process.wait(timeout=5)

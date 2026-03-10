@@ -82,6 +82,7 @@ class InspectionResult:
     region: str
     actual_data_type: str
     status: InspectionStatus
+    database_name: str = ""
     error_message: str = ""
 
 

@@ -6,6 +6,7 @@
         <thead>
             <tr>
                 <th>Connection</th>
+                <th>Database</th>
                 <th>URI</th>
                 <th>Account</th>
                 <th>Region</th>
@@ -15,6 +16,7 @@
             {% for r in not_found %}
             <tr class="not-found-row">
                 <td>{{ r.connection_name }}</td>
+                <td>{{ r.database_name }}</td>
                 <td>{{ r.uri }}</td>
                 <td>{{ r.account_id }}</td>
                 <td>{{ r.region }}</td>
@@ -32,6 +34,7 @@
         <thead>
             <tr>
                 <th>Connection</th>
+                <th>Database</th>
                 <th>URI</th>
                 <th>Error</th>
             </tr>
@@ -40,6 +43,7 @@
             {% for r in errors %}
             <tr class="error-row">
                 <td>{{ r.connection_name }}</td>
+                <td>{{ r.database_name }}</td>
                 <td>{{ r.uri }}</td>
                 <td class="error-msg">{{ r.error_message }}</td>
             </tr>
